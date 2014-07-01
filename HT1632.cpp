@@ -11,6 +11,7 @@ HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr, uint8_t cs1) {
   matrixNum  = 1;
   _width = 24 * matrixNum;
   _height = 16;
+  setupBuffer();
 }
 
 HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr, 
@@ -22,6 +23,7 @@ HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr,
   matrixNum  = 2;
   _width = 24 * matrixNum;
   _height = 16;
+  setupBuffer();
 }
 
 HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr, 
@@ -34,6 +36,7 @@ HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr,
   matrixNum  = 3;
   _width = 24 * matrixNum;
   _height = 16;
+  setupBuffer();
 }
 
 HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr, 
@@ -48,6 +51,18 @@ HT1632LEDMatrix::HT1632LEDMatrix(uint8_t data, uint8_t wr,
   matrixNum  = 4;
   _width = 24 * matrixNum;
   _height = 16;
+  setupBuffer();
+}
+
+/*
+Creates a buffer to the right of the rightmost panel that can be written to,
+in order to allow characters to smoothly scroll from the right
+ */
+void HT1632LEDMatrix::setupBuffer() {
+  _rightBufferWidth = 16;
+  for (uint8_t i = 0; i < (_rightBufferWidth * 16 / 8); i++) {
+    _rightBuffer[i] = 0;
+  }
 }
 
 
@@ -58,15 +73,7 @@ void HT1632LEDMatrix::clrPixel(uint8_t x, uint8_t y) {
   drawPixel(x, y, 0);
 }
 
-void HT1632LEDMatrix::drawPixel(uint8_t x, uint8_t y, uint8_t color) {
-  if (y >= _height) return;
-  if (x >= _width) return;
-
-  uint8_t m;
-  // figure out which matrix controller it is
-  m = x / 24;
-  x %= 24;
-
+uint16_t pixelInMatrix(uint8_t x, uint8_t y) {
   uint16_t i;
 
   if (x < 8) {
@@ -85,6 +92,31 @@ void HT1632LEDMatrix::drawPixel(uint8_t x, uint8_t y, uint8_t color) {
   } 
 
   i += y * 8;
+  return i;
+}
+
+void HT1632LEDMatrix::drawPixel(uint8_t x, uint8_t y, uint8_t color) {
+  if (y >= _height) return;
+  if (x >= _width + _rightBufferWidth) return;
+  // if it's in the buffer area, just update the buffer.
+  // don't draw anything.
+  if (x >= _width && x < _width + _rightBufferWidth) {
+    x %= 24;
+    uint16_t i = pixelInMatrix(x, y);
+    if (color) {
+      setPixelInBuffer(i);
+    }
+    else {
+      clrPixelInBuffer(i);
+    }
+    return;
+  }
+  uint8_t m;
+  // figure out which matrix controller it is
+  m = x / 24;
+  x %= 24;
+	
+  uint16_t i = pixelInMatrix(x, y);
 
   if (color) 
     matrices[m].setPixel(i);
@@ -92,6 +124,44 @@ void HT1632LEDMatrix::drawPixel(uint8_t x, uint8_t y, uint8_t color) {
     matrices[m].clrPixel(i);
 }
 
+uint8_t HT1632LEDMatrix::getPixel(uint8_t x, uint8_t y) {
+  uint8_t m;
+  // figure out which matrix controller it is
+  m = x / 24;
+  x %= 24;
+
+  uint16_t i = pixelInMatrix(x, y);
+  return matrices[m].getPixel(i);
+}
+
+uint8_t HT1632LEDMatrix::getPixelInBuffer(uint8_t x, uint8_t y) {
+  uint16_t i = pixelInMatrix(x, y);
+  return getPixelInBuffer(i);
+}
+
+void HT1632LEDMatrix::shiftLeft() {
+  // for each matrix, shift the entire panel left by one pixel
+  // and then set the rightmost column equal to the leftmost
+  // column of the next panel. Set the last column of the last
+  // panel to the first column of the right-side buffer.
+  // Then shift the right buffer left by one pixel
+	
+  for (int m = 0; m < matrixNum; m++) {
+    matrices[m].shiftLeft();
+    for (uint8_t y = 0; y < _height; y++) {
+      int colorToDraw;
+      if (m < matrixNum-1) {
+	colorToDraw = getPixel((m+1)*24, y);
+      }
+      else {
+	colorToDraw = getPixelInBuffer(0, y);
+      }
+      drawPixel((m+1)*24 - 1, y, colorToDraw);
+    }
+  }
+
+  shiftBufferLeft();
+}
 
 uint8_t HT1632LEDMatrix::width() {
   return _width;
@@ -328,6 +398,41 @@ void HT1632LEDMatrix::drawBitmap(uint8_t x, uint8_t y,
   }
 }
 
+uint8_t HT1632LEDMatrix::getPixelInBuffer(uint16_t i) {
+  return _rightBuffer[i/8] & _BV(i%8);
+}
+
+void HT1632LEDMatrix::setPixelInBuffer(uint16_t i) {
+  _rightBuffer[i/8] |= _BV(i%8); 
+}
+
+void HT1632LEDMatrix::clrPixelInBuffer(uint16_t i) {
+  _rightBuffer[i/8] &= ~_BV(i%8); 
+}
+
+void HT1632LEDMatrix::shiftBufferLeft() {
+  // buffer is made up of 32 bytes representing the pixels
+  for (uint16_t byte = 0; byte < 32; byte++) {
+    // shift each byte left by one bit
+    _rightBuffer[byte] = _rightBuffer[byte] << 1;
+    if (byte <= 15) {
+      // bytes numbered <= 15 in the buffer are in the left column
+      // nextByte is the byte to the right of the current byte
+      uint16_t nextByte = _rightBuffer[byte + 16];
+      // grab the most significant bit (i.e. leftmost bit of that byte) and
+      // copy it into the least significant bit (rightmost bit) of the current byte
+      bool msb = nextByte & (1 << 7);
+      if (msb) {
+	_rightBuffer[byte] |= (1 << 0);
+      }
+      else {
+	_rightBuffer[byte] &= ~(1 << 0);
+      }
+    }
+  }
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 
 
@@ -384,6 +489,36 @@ void HT1632::setPixel(uint16_t i) {
 
 void HT1632::clrPixel(uint16_t i) {
   ledmatrix[i/8] &= ~_BV(i%8); 
+}
+
+uint8_t HT1632::getPixel(uint16_t i) {
+  return ledmatrix[i/8] & _BV(i%8);
+}
+
+void HT1632::shiftLeft() {
+  // note that each panel is made up of 48 bytes representing the pixels
+  // 8 bits (pixels) to a byte equals 48 * 8 = 384 pixels per panel
+  for (uint16_t byte = 0; byte < 48; byte++) {
+    // shift each byte left by one bit
+    ledmatrix[byte] = ledmatrix[byte] << 1;
+    if (byte <= 31) {
+      // bytes numbered <= 31 in the panel are in the middle and left columns
+      // nextByte is the byte to the right of the current byte (in the same panel)
+      uint16_t nextByte = ledmatrix[byte + 16];
+      // grab the most significant bit (i.e. leftmost bit of that byte) and
+      // copy it into the least significant bit (rightmost bit) of the current byte
+      bool msb = nextByte & (1 << 7);
+      if (msb) {
+	ledmatrix[byte] |= (1 << 0);
+      }
+      else {
+	ledmatrix[byte] &= ~(1 << 0);
+      }
+    }
+    // note that the rightmost pixel of the panel is not set here because we
+    // don't know about the state of the neighboring panels. That pixel will
+    // be set in HT1632LEDMatrix::shiftLeft()
+  }
 }
 
 void HT1632::dumpScreen() {

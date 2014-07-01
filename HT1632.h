@@ -29,11 +29,12 @@ class HT1632 {
 
  public:
   HT1632(int8_t data, int8_t wr, int8_t cs, int8_t rd = -1);
-
   void begin(uint8_t type);
   
   void clrPixel(uint16_t i);
   void setPixel(uint16_t i);
+  uint8_t getPixel(uint16_t i);
+  void shiftLeft();
 
   void blink(boolean state);
   void setBrightness(uint8_t pwm);
@@ -60,6 +61,12 @@ class HT1632LEDMatrix : public Print {
 		  uint8_t cs, uint8_t cs3);
   HT1632LEDMatrix(uint8_t data, uint8_t wr, uint8_t cs1, 
 		  uint8_t cs2, uint8_t cs3, uint8_t cs4);
+ void setupBuffer(void);
+ void clrPixelInBuffer(uint16_t i);
+ void setPixelInBuffer(uint16_t i);
+ uint8_t getPixelInBuffer(uint16_t i);
+ uint8_t getPixelInBuffer(uint8_t x, uint8_t y);
+ void shiftBufferLeft(void);
 
  void begin(uint8_t type);
  void clearScreen(void);
@@ -73,6 +80,8 @@ class HT1632LEDMatrix : public Print {
   void clrPixel(uint8_t x, uint8_t y);
   void setPixel(uint8_t x, uint8_t y);
   void drawPixel(uint8_t x, uint8_t y, uint8_t color);
+  uint8_t getPixel(uint8_t x, uint8_t y);
+  void shiftLeft();
 
   void drawLine(int8_t x0, int8_t y0, int8_t x1, int8_t y1, uint8_t color);
   void drawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color);
@@ -98,6 +107,7 @@ class HT1632LEDMatrix : public Print {
 
  private:
   HT1632 *matrices;
-  uint8_t matrixNum, _width, _height;
+  uint8_t matrixNum, _width, _height, _rightBufferWidth;
   uint8_t cursor_x, cursor_y, textsize, textcolor;
+  uint8_t _rightBuffer[32];  // 16 * 16 / 8
 };
